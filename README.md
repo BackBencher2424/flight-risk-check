@@ -2,7 +2,7 @@
 
 Team 5 (Ahrar Karim, Hamza Tariq, Vishesh Goyal), Questrom MSBA Chart Champ 2026.
 
-Enter an airline, route, travel date and departure time. The app gives the calibrated chance the flight is
+Pick From and To, then the airline, travel date and departure time in the sidebar. The app gives the calibrated chance the flight is
 cancelled, diverted or more than an hour late (and the chance it arrives 15+ minutes late), suggests a safer
 departure time, compares other airlines on the route, and lists real backup flights later that day (from 2025 schedules for that month and weekday). On the day
 of travel you can add how late the incoming plane is.
@@ -19,7 +19,7 @@ It opens at http://localhost:8501.
 ## Host it on Streamlit Community Cloud (free, about 5 minutes)
 
 1. Create a new GitHub repository and upload everything in this folder, keeping the structure:
-   `app.py`, `requirements.txt`, `README.md`, `model/calc_data.json`, `model/cities.json`, `model/schedule.json.gz`, `.streamlit/config.toml`.
+   `app.py`, `live.py`, `requirements.txt`, `README.md`, `model/calc_data.json`, `model/cities.json`, `model/schedule.json.gz`, `.streamlit/config.toml`.
    (On GitHub's web upload, drag the whole folder in; the `.streamlit` folder is hidden on macOS, so press
    Cmd+Shift+. in Finder to show it.)
 2. Go to share.streamlit.io and sign in with GitHub.
@@ -37,3 +37,30 @@ It opens at http://localhost:8501.
   observed rates.
 - Limits: the model cannot see weather or air-traffic problems on the actual day, fares or seat availability,
   and it reflects 2025 patterns.
+
+## Live flight status (optional)
+
+The app can check a flight's real-time status and fill in the day-of delay automatically. Without a key,
+everything else works and the live box just says the lookup is off.
+
+**Free option: AviationStack** (100 lookups a month on the free plan). It gives the flight's live status,
+gate and departure delay; that delay is used as the incoming plane's delay.
+
+1. Go to aviationstack.com and click **Get Free API Key**. Pick the **Free** plan and create an account.
+2. Confirm your email, log in, and copy **Your API Access Key** from the dashboard.
+3. On Streamlit Community Cloud: open your app, click the **⋮** menu (or **Manage app**), then
+   **Settings → Secrets**, paste the line below with your key, and click **Save**. The app restarts by itself.
+
+   ```
+   AVIATIONSTACK_KEY = "paste-your-key-here"
+   ```
+
+4. Running on your laptop instead: create the file `.streamlit/secrets.toml` with the same line.
+   Never upload `secrets.toml` to GitHub.
+
+Each click on **Get live status** uses one lookup (results are cached for 5 minutes), so 100 a month is
+plenty for a demo; avoid clicking repeatedly.
+
+**Paid option: FlightAware AeroAPI** (Personal tier: up to $5 of usage free a month, but payment details are
+required at signup). It also reports the inbound aircraft's own delay, which is exactly what the day-of model
+was trained on. Add it the same way as `AEROAPI_KEY = "..."`. If both keys are present, FlightAware is used.
