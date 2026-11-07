@@ -5,6 +5,7 @@ Gives the calibrated chance that a U.S. flight is severely disrupted
 using gradient-boosted tree models trained on all 2025 BTS flights for ten airlines.
 The trees are evaluated in pure Python, so the app needs no compiled ML libraries.
 """
+import gzip
 import json
 import math
 from datetime import date, time, timedelta
@@ -32,10 +33,25 @@ AVG_SEVERE, AVG_LATE = 0.096, 0.235  # all 2025 flights in the data
 def load():
     data = json.loads((HERE / "model" / "calc_data.json").read_text())
     cities = json.loads((HERE / "model" / "cities.json").read_text())
+    with gzip.open(HERE / "model" / "schedule.json.gz", "rt") as f:
+        sched = json.load(f)  # "ORIG|DEST" -> [airline, flight no, sched dep HHMM, times flown, % severe, month×weekday bitmask]
     for m in data["models"].values():
         m["iso_x"] = np.array(m["iso_x"])
         m["iso_y"] = np.array(m["iso_y"])
-    return data, cities
+    return data, cities, sched
+
+
+def backups(sched, o, de, month, dow, dep_hr):
+    """Real 2025 flights on this route that ran on this weekday in this month, departing after dep_hr."""
+    bit = 1 << ((month - 1) * 7 + (dow - 1))
+    after = int(dep_hr) * 100 + round((dep_hr % 1) * 60)
+    best = {}
+    for c, fn, dep, n, sev, mask in sched.get(f"{o}|{de}", []):
+        if dep > after and int(mask) & bit:
+            k = (c, fn)
+            if k not in best or n > best[k][3]:
+                best[k] = (c, fn, dep, n, sev, mask)
+    return sorted(best.values(), key=lambda r: r[2])
 
 
 def predict(model, x):
@@ -101,7 +117,7 @@ def verdict(p):
 
 
 # ---------------------------------------------------------------- page
-D, CITIES = load()
+D, CITIES, SCHED = load()
 city = lambda c: CITIES.get(c, c)
 
 st.markdown(
@@ -168,14 +184,51 @@ m1.metric("Serious disruption", pct(ps), f"{(ps-AVG_SEVERE)*100:+.1f} pts vs ave
           help="Cancelled, diverted or arriving more than 60 minutes late. Average 2025 flight: 9.6%.")
 m2.metric("Arrives 15+ min late or cancelled", pct(pl), f"{(pl-AVG_LATE)*100:+.1f} pts vs average flight",
           delta_color="inverse", help="The standard 'delayed' definition. Average 2025 flight: 23.5%.")
-later = round(later_flights(hours, int(dep_hr)))
-m3.metric("Backup flights later that day", "None" if later < 1 else f"≈ {later}",
-          help="Same airline, same route, departing later the same day: your rebooking options if this flight is cancelled.")
+bk = backups(SCHED, o, de, month, dow, dep_hr)
+same_airline = [b for b in bk if b[0] == car]
+later = len(same_airline) if f"{o}|{de}" in SCHED else round(later_flights(hours, int(dep_hr)))
+m3.metric("Backup flights later that day", "None" if later < 1 else str(later),
+          help="Flights on the same airline and route that departed later the same day in 2025 schedules: "
+               "your free rebooking options if this flight is cancelled.")
 st.caption("Booking-time estimate from 2025 patterns." if prev is None else
            "Day-of estimate: includes how the incoming plane is doing.")
 
-# --- step 4: how to lower the risk
-st.subheader("4 · How to lower your risk")
+# --- step 4: backup flights
+st.subheader("4 · Backup flights if yours is cancelled")
+if st.toggle("Show backup flights", value=True, key="show_backups"):
+    if not bk:
+        st.warning(f"No later flights on {o} → {de} ran on {day:%A}s in {day:%B} 2025, on any of the ten airlines. "
+                   "If this flight is cancelled you are likely stuck until the next day. Consider an earlier flight "
+                   "or a nearby airport.")
+    else:
+        rows = []
+        for c, fn, dep, n, sev_hist, _ in bk:
+            h = dep // 100 + (dep % 100) / 60
+            has_model = D["routes"].get(c, {}).get(o, {}).get(de) is not None
+            rows.append({
+                "Departs": clock(h),
+                "Airline": AIRLINES.get(c, c).split(" (")[0] + f" ({c})",
+                "Flight": f"{c} {fn}",
+                "Same airline": "Yes" if c == car else "No",
+                "Chance of serious disruption": 100 * risk(D, "sev", c, o, de, month, dow, h) if has_model else None,
+                "Severe in 2025": float(sev_hist),
+                "Flown in 2025": n,
+            })
+        bdf = pd.DataFrame(rows)
+        st.dataframe(bdf, hide_index=True, width="stretch",
+                     column_config={
+                         "Chance of serious disruption": st.column_config.ProgressColumn(
+                             format="%.0f%%", min_value=0, max_value=max(30.0, float(bdf["Chance of serious disruption"].max() or 0))),
+                         "Severe in 2025": st.column_config.NumberColumn(
+                             format="%.0f%%", help="Share of this flight’s 2025 operations that were cancelled, diverted or 60+ min late."),
+                         "Flown in 2025": st.column_config.NumberColumn(format="%d times")})
+        st.caption(f"{len(same_airline)} on {AIRLINES[car].split(' (')[0]} and {len(bk) - len(same_airline)} on other airlines "
+                   f"departed {o} → {de} after {clock(dep_hr)} on {day:%A}s in {day:%B} 2025. Same-airline flights are usually "
+                   "the easiest free rebooking; other airlines need a new ticket or the airline’s agreement. "
+                   "Schedules change, so confirm on the airline’s site.")
+
+# --- step 5: how to lower the risk
+st.subheader("5 · How to lower your risk")
 tips = []
 base = ps if prev is None else risk(D, "sev", car, o, de, month, dow, dep_hr)
 best = min(((h, risk(D, "sev", car, o, de, month, dow, h + 0.5)) for h in flown), key=lambda t: t[1], default=None)
